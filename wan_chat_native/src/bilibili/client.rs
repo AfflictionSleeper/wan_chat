@@ -26,47 +26,60 @@ const MIXIN_KEY_ENC_TAB: [usize; 64] = [
 
 #[derive(Debug, Clone)]
 pub enum BilibiliEvent {
-    Danmaku(DanmakuMessage),
-    Status(String),
-    Error(String),
+    Danmaku { session_id: u64, message: DanmakuMessage },
+    Status { session_id: u64, message: String },
+    Error { session_id: u64, message: String },
+}
+
+impl BilibiliEvent {
+    pub fn session_id(&self) -> u64 {
+        match self {
+            Self::Danmaku { session_id, .. } => *session_id,
+            Self::Status { session_id, .. } => *session_id,
+            Self::Error { session_id, .. } => *session_id,
+        }
+    }
 }
 
 pub struct BilibiliClient {
     tx: Sender<BilibiliEvent>,
     running: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    session_id: u64,
 }
 
 impl BilibiliClient {
     pub fn new(tx: Sender<BilibiliEvent>) -> Self {
-        Self { tx, running: Arc::new(AtomicBool::new(false)), worker: None }
+        Self { tx, running: Arc::new(AtomicBool::new(false)), worker: None, session_id: 0 }
     }
 
     pub fn connect(&mut self, room_id: u64, cookie: String) {
         self.disconnect();
         if cookie.trim().is_empty() {
-            let _ = self.tx.send(BilibiliEvent::Error("需要 B站 Cookie 才能连接".to_string()));
+            let _ = self.tx.send(BilibiliEvent::Error { session_id: self.session_id, message: "需要 B站 Cookie 才能连接".to_string() });
             return;
         }
 
-        self.running.store(true, Ordering::Relaxed);
+        self.session_id = self.session_id.wrapping_add(1).max(1);
+        let session_id = self.session_id;
+        let running = Arc::new(AtomicBool::new(true));
+        self.running = running.clone();
         let tx = self.tx.clone();
-        let running = self.running.clone();
         self.worker = Some(thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
                 Err(err) => {
-                    let _ = tx.send(BilibiliEvent::Error(format!("启动异步运行时失败: {err}")));
+                    send_error(&tx, session_id, format!("启动异步运行时失败: {err}"));
                     return;
                 }
             };
 
             rt.block_on(async move {
-                if let Err(err) = run_client(room_id, cookie, tx.clone(), running.clone()).await {
-                    let _ = tx.send(BilibiliEvent::Error(err.to_string()));
+                if let Err(err) = run_client(room_id, cookie, tx.clone(), running.clone(), session_id).await {
+                    send_error(&tx, session_id, err.to_string());
                 }
                 running.store(false, Ordering::Relaxed);
-                let _ = tx.send(BilibiliEvent::Status("已断开".to_string()));
+                send_status(&tx, session_id, "已断开");
             });
         }));
     }
@@ -75,15 +88,23 @@ impl BilibiliClient {
         self.running.store(false, Ordering::Relaxed);
     }
 
+    pub fn session_id(&self) -> u64 {
+        self.session_id
+    }
+
 }
 
-async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, running: Arc<AtomicBool>) -> anyhow::Result<()> {
+async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, running: Arc<AtomicBool>, session_id: u64) -> anyhow::Result<()> {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
-    let _ = tx.send(BilibiliEvent::Status("获取连接参数...".to_string()));
+    send_status(&tx, session_id, "获取连接参数...");
 
     let real_room_id = resolve_room_id(&http, room_id).await.unwrap_or(room_id);
     if real_room_id != room_id {
-        let _ = tx.send(BilibiliEvent::Status(format!("房间 {room_id} -> 真实房间 {real_room_id}")));
+        send_status(&tx, session_id, format!("房间 {room_id} -> 真实房间 {real_room_id}"));
+    }
+
+    if !running.load(Ordering::Relaxed) {
+        return Ok(());
     }
 
     let danmu_info = get_danmu_info(&http, real_room_id, &cookie).await?;
@@ -108,7 +129,11 @@ async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, run
     let ws_url = format!("wss://{host_name}:{port}/sub");
 
     let (uid, buvid3) = parse_cookie(&cookie);
-    let _ = tx.send(BilibiliEvent::Status(format!("已登录 UID:{uid}")));
+    send_status(&tx, session_id, format!("已登录 UID:{uid}"));
+
+    if !running.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     let mut request = ws_url.into_client_request()?;
     request.headers_mut().insert("Origin", HeaderValue::from_static("https://live.bilibili.com"));
@@ -131,7 +156,7 @@ async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, run
     }
     let auth_raw = serde_json::to_vec(&auth_body)?;
     write.send(Message::Binary(create_auth_packet(&auth_raw).into())).await?;
-    let _ = tx.send(BilibiliEvent::Status("已连接".to_string()));
+    send_status(&tx, session_id, "已连接");
 
     let mut heartbeat = interval(Duration::from_secs(30));
     while running.load(Ordering::Relaxed) {
@@ -152,21 +177,21 @@ async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, run
                     match op {
                         OP_HEARTBEAT_REPLY => {
                             if let Some(online) = parse_online_count(&body) {
-                                let _ = tx.send(BilibiliEvent::Status(format!("已连接 | 人气 {online}")));
+                                send_status(&tx, session_id, format!("已连接 | 人气 {online}"));
                             }
                         }
                         OP_AUTH_REPLY => {
                             if let Ok(value) = serde_json::from_slice::<Value>(&body) {
                                 if value.get("code").and_then(Value::as_i64) == Some(0) {
-                                    let _ = tx.send(BilibiliEvent::Status("已加入房间".to_string()));
+                                    send_status(&tx, session_id, "已加入房间");
                                 } else {
-                                    let _ = tx.send(BilibiliEvent::Error(format!("加房失败: {value}")));
+                                    send_error(&tx, session_id, format!("加房失败: {value}"));
                                 }
                             }
                         }
                         OP_MESSAGE => {
                             if let Some(message) = parse_danmaku_message(&body) {
-                                let _ = tx.send(BilibiliEvent::Danmaku(message));
+                                let _ = tx.send(BilibiliEvent::Danmaku { session_id, message });
                             }
                         }
                         _ => {}
@@ -178,6 +203,14 @@ async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, run
 
     let _ = write.send(Message::Close(None)).await;
     Ok(())
+}
+
+fn send_status(tx: &Sender<BilibiliEvent>, session_id: u64, message: impl Into<String>) {
+    let _ = tx.send(BilibiliEvent::Status { session_id, message: message.into() });
+}
+
+fn send_error(tx: &Sender<BilibiliEvent>, session_id: u64, message: impl Into<String>) {
+    let _ = tx.send(BilibiliEvent::Error { session_id, message: message.into() });
 }
 
 async fn resolve_room_id(http: &reqwest::Client, room_id: u64) -> Option<u64> {

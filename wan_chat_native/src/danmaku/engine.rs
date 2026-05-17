@@ -76,6 +76,11 @@ impl DanmakuEngine {
         }
     }
 
+    pub fn clear_all(&mut self) {
+        self.pending.clear();
+        self.active.clear();
+    }
+
     fn spawn_pending(&mut self, dt: f32, window_width: f32, window_height: f32) {
         if self.pending.is_empty() || self.active.len() >= self.config.max_items {
             return;

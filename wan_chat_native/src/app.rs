@@ -47,7 +47,9 @@ pub fn run() -> anyhow::Result<()> {
         }
 
         while let Ok(event) = bili_rx.try_recv() {
-            handle_bili_event(event, &mut engine, window.hwnd());
+            if event.session_id() == bili_client.session_id() {
+                handle_bili_event(event, &mut engine, window.hwnd());
+            }
         }
 
         let now = Instant::now();
@@ -105,6 +107,7 @@ fn handle_command(
                 config.bilibili.room_id = room_id;
                 config.bilibili.cookie = normalize_cookie(&cookie);
                 config.save()?;
+                engine.clear_all();
                 bili_client.disconnect();
                 bili_client.connect(config.bilibili.room_id, config.bilibili.cookie.clone());
             }
@@ -149,7 +152,7 @@ fn apply_mode(window: &OverlayWindow, renderer: &mut D2DRenderer, config: &mut C
 
 fn handle_bili_event(event: BilibiliEvent, engine: &mut DanmakuEngine, owner: windows::Win32::Foundation::HWND) {
     match event {
-        BilibiliEvent::Danmaku(message) => {
+        BilibiliEvent::Danmaku { message, .. } => {
             let text = if message.username.trim().is_empty() {
                 message.text
             } else {
@@ -157,10 +160,10 @@ fn handle_bili_event(event: BilibiliEvent, engine: &mut DanmakuEngine, owner: wi
             };
             engine.enqueue_text(text, message.user_id, message.color);
         }
-        BilibiliEvent::Status(status) => {
+        BilibiliEvent::Status { message: status, .. } => {
             println!("[Bili] {status}");
         }
-        BilibiliEvent::Error(error) => {
+        BilibiliEvent::Error { message: error, .. } => {
             eprintln!("[Bili Error] {error}");
             show_error(owner, &error);
         }
