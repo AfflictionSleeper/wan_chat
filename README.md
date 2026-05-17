@@ -1,7 +1,10 @@
 # WanChat
 
-WanChat 是一个用于 B 站直播间弹幕显示的桌面悬浮弹幕工具。它可以把直播间弹幕以透明悬浮层的形式显示在屏幕上，并支持鼠标穿透、窗口编辑、字体/透明度调整、关键字屏蔽和用户 ID 屏蔽，整体效果如下。
-<img width="1643" height="1169" alt="image" src="https://github.com/user-attachments/assets/9445c819-c473-41ea-9853-73204cf7dba3" />
+WanChat 是一个用于 B 站直播间弹幕显示的桌面悬浮弹幕工具。它可以把直播间弹幕以透明悬浮层的形式显示在屏幕上，游戏弹幕两不误，并支持鼠标穿透、窗口编辑、字体/透明度调整、关键字屏蔽和用户 ID 屏蔽，整体效果如下。
+<img width="2018" height="1110" alt="image" src="https://github.com/user-attachments/assets/a6095e84-926a-4bab-b15f-6de7a948a7c4" />
+<img width="2057" height="880" alt="image" src="https://github.com/user-attachments/assets/6c2658fe-2776-4edd-b6d1-3cfdee9e25dd" />
+
+
 
 
 ## 功能简介
