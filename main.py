@@ -5,6 +5,7 @@ B站风格弹幕覆盖层 - Danmaku Overlay
 """
 
 import ctypes
+import html
 import json
 import os
 import random
@@ -42,6 +43,7 @@ WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOPMOST = 0x00000008
 WM_NCHITTEST = 0x0084
 HTTRANSPARENT = -1
+VK_LBUTTON = 0x01
 SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
@@ -71,6 +73,8 @@ except AttributeError:
 
 CallWindowProc = user32.CallWindowProcW
 DefWindowProc = user32.DefWindowProcW
+GetAsyncKeyState = user32.GetAsyncKeyState
+GetCursorPos = user32.GetCursorPos
 
 GetWindowLongPtr.argtypes = [ctypes.c_void_p, ctypes.c_int]
 GetWindowLongPtr.restype = ctypes.c_void_p
@@ -91,6 +95,14 @@ DefWindowProc.argtypes = [
     ctypes.c_ssize_t,
 ]
 DefWindowProc.restype = ctypes.c_ssize_t
+GetAsyncKeyState.argtypes = [ctypes.c_int]
+GetAsyncKeyState.restype = ctypes.c_short
+GetCursorPos.argtypes = [ctypes.c_void_p]
+GetCursorPos.restype = ctypes.c_int
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 # 设置 DPI 感知（避免高 DPI 屏幕下的缩放问题）
 try:
@@ -262,6 +274,66 @@ DANMAKU_COLORS = [
     "#00FFCC", "#FF6699",
 ]
 
+HTML_COLOR_NAMES = {
+    "black": "#000000", "white": "#FFFFFF", "red": "#FF0000",
+    "green": "#008000", "blue": "#0000FF", "yellow": "#FFFF00",
+    "cyan": "#00FFFF", "aqua": "#00FFFF", "magenta": "#FF00FF",
+    "fuchsia": "#FF00FF", "orange": "#FFA500", "purple": "#800080",
+    "pink": "#FFC0CB", "gray": "#808080", "grey": "#808080",
+}
+
+
+def parse_html_font_tag(text, fallback_color, fallback_size):
+    if not isinstance(text, str) or "<" not in text:
+        return text, fallback_color, fallback_size
+
+    color = fallback_color
+    font_size = fallback_size
+    match = re.search(r"<font\b([^>]*)>", text, re.IGNORECASE)
+    if match:
+        attrs = _parse_html_attrs(match.group(1))
+        if "color" in attrs:
+            color = _normalize_html_color(attrs["color"], color)
+        if "size" in attrs:
+            font_size = _normalize_html_font_size(attrs["size"], font_size)
+        if "style" in attrs:
+            style = attrs["style"]
+            style_color = re.search(r"color\s*:\s*([^;]+)", style, re.IGNORECASE)
+            if style_color:
+                color = _normalize_html_color(style_color.group(1), color)
+            style_size = re.search(r"font-size\s*:\s*([^;]+)", style, re.IGNORECASE)
+            if style_size:
+                font_size = _normalize_html_font_size(style_size.group(1), font_size)
+
+    clean_text = html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+    return clean_text or text, color, font_size
+
+
+def _parse_html_attrs(raw_attrs):
+    attrs = {}
+    pattern = r"([a-zA-Z_:][-a-zA-Z0-9_:]*)\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)"
+    for key, value in re.findall(pattern, raw_attrs):
+        attrs[key.lower()] = value.strip().strip("'\"")
+    return attrs
+
+
+def _normalize_html_color(value, fallback):
+    value = str(value).strip().lower()
+    if value in HTML_COLOR_NAMES:
+        return HTML_COLOR_NAMES[value]
+    if re.fullmatch(r"#[0-9a-f]{3}", value):
+        return "#" + "".join(ch * 2 for ch in value[1:]).upper()
+    if re.fullmatch(r"#[0-9a-f]{6}", value):
+        return value.upper()
+    return fallback
+
+
+def _normalize_html_font_size(value, fallback):
+    match = re.search(r"\d+", str(value))
+    if not match:
+        return fallback
+    return max(8, min(96, int(match.group(0))))
+
 
 # ──────────────────────────────────────────────
 # 弹幕引擎
@@ -269,7 +341,7 @@ DANMAKU_COLORS = [
 
 class DanmakuItem:
     __slots__ = ("text", "color", "font_size", "x", "y",
-                 "speed", "canvas_id", "width")
+                 "speed", "canvas_id", "outline_ids", "width")
 
     def __init__(self, text, color, font_size, x, y, speed):
         self.text = text
@@ -279,6 +351,7 @@ class DanmakuItem:
         self.y = y
         self.speed = speed
         self.canvas_id = None
+        self.outline_ids = []
         self.width = 0
 
 
@@ -323,6 +396,7 @@ class DanmakuEngine:
             color = random.choice(DANMAKU_COLORS)
         if font_size is None:
             font_size = self.cfg["danmaku"]["font_size"]
+        text, color, font_size = parse_html_font_tag(text, color, font_size)
 
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
@@ -368,6 +442,16 @@ class DanmakuEngine:
     def _render_item(self, item):
         try:
             font = self._get_font(item.font_size)
+            for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                oid = self.canvas.create_text(
+                    item.x + ox, item.y + oy,
+                    text=item.text,
+                    fill="#000000",
+                    font=font,
+                    anchor="w",
+                    state="normal",
+                )
+                item.outline_ids.append(oid)
             cid = self.canvas.create_text(
                 item.x, item.y,
                 text=item.text,
@@ -388,6 +472,8 @@ class DanmakuEngine:
                 to_remove.append(item)
             elif item.canvas_id is not None:
                 try:
+                    for oid, (ox, oy) in zip(item.outline_ids, [(-1, 0), (1, 0), (0, -1), (0, 1)]):
+                        self.canvas.coords(oid, item.x + ox, item.y + oy)
                     self.canvas.coords(item.canvas_id, item.x, item.y)
                 except Exception:
                     pass
@@ -397,6 +483,12 @@ class DanmakuEngine:
                 self.items.remove(item)
 
     def _destroy_item(self, item):
+        for oid in item.outline_ids:
+            try:
+                self.canvas.delete(oid)
+            except Exception:
+                pass
+        item.outline_ids = []
         if item.canvas_id is not None:
             try:
                 self.canvas.delete(item.canvas_id)
@@ -442,7 +534,13 @@ class OverlayWindow:
         self._wndproc = None
         self._old_wndprocs = {}
         self._last_frame_time = time.time()
-        self._drag_data = {"x": 0, "y": 0, "edge": None, "start_geo": None}
+        self._drag_data = {
+            "x": 0,
+            "y": 0,
+            "edge": None,
+            "start_geo": None,
+            "moving": False,
+        }
         self._border_rect = None
         self._edit_bg_rect = None
 
@@ -714,10 +812,35 @@ class OverlayWindow:
         self._drag_data["start_geo"] = (
             self._get_geometry() if edge else None
         )
+        if edge is None:
+            self._drag_data["moving"] = True
+            self._drag_data["start_geo"] = self._get_geometry()
+            self._poll_window_move()
+            return "break"
+
+    def _poll_window_move(self):
+        if self.cfg["mode"] != "edit" or not self._drag_data.get("moving"):
+            return
+        if GetAsyncKeyState(VK_LBUTTON) >= 0:
+            self._drag_data["moving"] = False
+            self._save_window_config()
+            return
+
+        point = POINT()
+        if not GetCursorPos(ctypes.byref(point)):
+            self.root.after(16, self._poll_window_move)
+            return
+
+        ox, oy, _, _ = self._drag_data["start_geo"]
+        dx = point.x - self._drag_data["x"]
+        dy = point.y - self._drag_data["y"]
+        self.root.geometry(f"+{ox + dx}+{oy + dy}")
+        self.root.after(16, self._poll_window_move)
 
     def _on_release(self, event):
         if self.cfg["mode"] != "edit":
             return
+        self._drag_data["moving"] = False
         self._drag_data["edge"] = None
         self._drag_data["start_geo"] = None
         self._save_window_config()
@@ -725,6 +848,8 @@ class OverlayWindow:
     def _on_motion(self, event):
         if self.cfg["mode"] != "edit":
             return
+        if self._drag_data.get("moving"):
+            return "break"
         dx = event.x_root - self._drag_data["x"]
         dy = event.y_root - self._drag_data["y"]
         edge = self._drag_data["edge"]
@@ -1058,7 +1183,7 @@ def create_tray_icon(overlay, config):
                 on_opacity(v),
                 checked=lambda item, v=v: _checked_opacity(v),
                 radio=True,
-            ) for v in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 1.0]]
+            ) for v in [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]]
         )),
         pystray.MenuItem("弹幕速度", pystray.Menu(
             *[pystray.MenuItem(
@@ -1074,7 +1199,7 @@ def create_tray_icon(overlay, config):
                 on_font_size(s),
                 checked=lambda item, s=s: _checked_font_size(s),
                 radio=True,
-            ) for s in [14, 16, 18, 20, 22, 24, 26, 28, 32, 36, 40, 48, 56]]
+            ) for s in [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26, 28, 32, 36, 40, 48, 56]]
         )),
         pystray.MenuItem("弹幕屏蔽关键字...", on_block_keywords),
         pystray.MenuItem("ID弹幕屏蔽...", on_block_user_ids),
