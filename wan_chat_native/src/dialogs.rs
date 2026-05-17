@@ -1,16 +1,17 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
     LoadCursorW, MessageBoxW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateMessage, BS_DEFPUSHBUTTON, CS_HREDRAW, CS_VREDRAW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_DEFPUSHBUTTON, CS_HREDRAW, CS_VREDRAW,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, GWLP_USERDATA,
-    HMENU, IDC_ARROW, MB_ICONERROR, MB_OK, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_CLOSE, WM_COMMAND, WM_DESTROY, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
+    HMENU, HWND_TOPMOST, IDC_ARROW, MB_ICONERROR, MB_OK, MSG, SW_SHOW, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_SHOWWINDOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+    WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
+    WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
 };
 
 const CLASS_NAME: PCWSTR = w!("WanChatNativeInputDialog");
@@ -26,9 +27,9 @@ struct DialogState {
     done: bool,
 }
 
-pub fn show_connect_dialog(owner: HWND, saved_room: u64, saved_cookie: &str) -> Option<(u64, String)> {
+pub fn show_connect_dialog(saved_room: u64, saved_cookie: &str) -> Option<(u64, String)> {
     let room_initial = if saved_room > 0 { saved_room.to_string() } else { String::new() };
-    let values = show_connect_form(owner, &room_initial, saved_cookie)?;
+    let values = show_connect_form(&room_initial, saved_cookie)?;
     let room_id = parse_room_id(values.first()?)?;
     let cookie = values.get(1).cloned().unwrap_or_default();
     Some((room_id, cookie))
@@ -53,10 +54,10 @@ fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: 
         register_class(instance).ok()?;
 
         let width = if wide { 520 } else { 380 };
-        let height = if multiline { 360 } else { 170 };
+        let height = if multiline { 460 } else { 170 };
         let title_w = wide_string(title);
         let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WS_EX_TOPMOST,
             CLASS_NAME,
             PCWSTR(title_w.as_ptr()),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
@@ -95,7 +96,7 @@ fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: 
         } else {
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | ES_AUTOHSCROLL as u32 | ES_LEFT as u32)
         };
-        let edit_h = if multiline { height - 100 } else { 26 };
+        let edit_h = if multiline { height - 140 } else { 26 };
         let edit = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("EDIT"),
@@ -114,7 +115,7 @@ fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: 
         let initial_w = wide_string(initial);
         let _ = SetWindowTextW(edit, PCWSTR(initial_w.as_ptr()));
 
-        let button_y = if multiline { height - 54 } else { 82 };
+        let button_y = if multiline { height - 82 } else { 82 };
         let ok_w = wide_string("确定");
         let cancel_w = wide_string("取消");
         let _ok = CreateWindowExW(
@@ -148,6 +149,7 @@ fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: 
 
         let _ = EnableWindow(owner, false);
         let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         let _ = SetForegroundWindow(hwnd);
 
         let mut msg = MSG::default();
@@ -164,7 +166,7 @@ fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: 
     }
 }
 
-fn show_connect_form(owner: HWND, room_initial: &str, cookie_initial: &str) -> Option<Vec<String>> {
+fn show_connect_form(room_initial: &str, cookie_initial: &str) -> Option<Vec<String>> {
     unsafe {
         let module = GetModuleHandleW(None).ok()?;
         let instance = HINSTANCE(module.0);
@@ -174,7 +176,7 @@ fn show_connect_form(owner: HWND, room_initial: &str, cookie_initial: &str) -> O
         let height = 220;
         let title_w = wide_string("连接B站直播间");
         let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WS_EX_TOPMOST,
             CLASS_NAME,
             PCWSTR(title_w.as_ptr()),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
@@ -182,7 +184,7 @@ fn show_connect_form(owner: HWND, room_initial: &str, cookie_initial: &str) -> O
             220,
             width,
             height,
-            Some(owner),
+            None,
             None,
             Some(instance),
             None,
@@ -234,8 +236,9 @@ fn show_connect_form(owner: HWND, room_initial: &str, cookie_initial: &str) -> O
             None,
         ).ok()?;
 
-        let _ = EnableWindow(owner, false);
         let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        let _ = SetFocus(Some(room_edit));
         let _ = SetForegroundWindow(hwnd);
 
         let mut msg = MSG::default();
@@ -244,8 +247,6 @@ fn show_connect_form(owner: HWND, room_initial: &str, cookie_initial: &str) -> O
             DispatchMessageW(&msg);
         }
 
-        let _ = EnableWindow(owner, true);
-        let _ = SetForegroundWindow(owner);
         let result = state.result.clone();
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         result

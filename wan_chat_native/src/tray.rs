@@ -1,4 +1,5 @@
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -8,14 +9,15 @@ use windows::Win32::UI::Shell::{
     NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DestroyWindow, GetCursorPos, GetWindowLongPtrW, LoadIconW, PostQuitMessage,
-    RegisterClassW, SetForegroundWindow, SetWindowLongPtrW, TrackPopupMenu, HMENU,
-    IDI_APPLICATION, MF_POPUP, MF_SEPARATOR, MF_STRING, TPM_LEFTALIGN,
-    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WNDCLASSW, GWLP_USERDATA,
+    AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+    DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, GetWindowLongPtrW, LoadIconW, PostMessageW,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    TrackPopupMenu, HICON, HMENU, IDI_APPLICATION, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_COMMAND, WM_DESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, GWLP_USERDATA,
 };
 
+use crate::config::DanmakuConfig;
 use crate::overlay_window::OverlayMode;
 
 const CLASS_NAME: PCWSTR = w!("WanChatNativeTray");
@@ -62,14 +64,24 @@ pub enum AppCommand {
 
 struct TrayState {
     tx: Sender<AppCommand>,
+    menu_state: Arc<Mutex<TrayMenuState>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TrayMenuState {
+    opacity: f32,
+    speed: f32,
+    font_size: f32,
 }
 
 pub struct TrayController {
     hwnd: HWND,
+    icon: HICON,
+    menu_state: Arc<Mutex<TrayMenuState>>,
 }
 
 impl TrayController {
-    pub fn new(tx: Sender<AppCommand>) -> anyhow::Result<Self> {
+    pub fn new(tx: Sender<AppCommand>, config: &DanmakuConfig) -> anyhow::Result<Self> {
         unsafe {
             let module = GetModuleHandleW(None)?;
             let instance = HINSTANCE(module.0);
@@ -89,10 +101,18 @@ impl TrayController {
                 None,
             )?;
 
-            let state = Box::new(TrayState { tx });
+            let menu_state = Arc::new(Mutex::new(TrayMenuState::from_config(config)));
+            let state = Box::new(TrayState { tx, menu_state: menu_state.clone() });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
-            add_icon(hwnd)?;
-            Ok(Self { hwnd })
+            let icon = create_wan_icon(instance).or_else(|_| LoadIconW(None, IDI_APPLICATION))?;
+            add_icon(hwnd, icon)?;
+            Ok(Self { hwnd, icon, menu_state })
+        }
+    }
+
+    pub fn update_settings(&self, config: &DanmakuConfig) {
+        if let Ok(mut state) = self.menu_state.lock() {
+            *state = TrayMenuState::from_config(config);
         }
     }
 }
@@ -107,8 +127,15 @@ impl Drop for TrayController {
                 drop(Box::from_raw(state));
                 SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
             }
+            let _ = DestroyIcon(self.icon);
             let _ = DestroyWindow(self.hwnd);
         }
+    }
+}
+
+impl TrayMenuState {
+    fn from_config(config: &DanmakuConfig) -> Self {
+        Self { opacity: config.opacity, speed: config.speed, font_size: config.font_size }
     }
 }
 
@@ -123,11 +150,11 @@ unsafe fn register_class(instance: HINSTANCE) -> windows::core::Result<()> {
     Ok(())
 }
 
-unsafe fn add_icon(hwnd: HWND) -> windows::core::Result<()> {
+unsafe fn add_icon(hwnd: HWND, icon: HICON) -> windows::core::Result<()> {
     let mut nid = notify_data(hwnd);
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
-    nid.hIcon = LoadIconW(None, IDI_APPLICATION)?;
+    nid.hIcon = icon;
     set_tip(&mut nid, "WanChat");
     Shell_NotifyIconW(NIM_ADD, &mut nid).ok()
 }
@@ -172,21 +199,25 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
 }
 
 unsafe fn show_menu(hwnd: HWND) {
+    let current = tray_state(hwnd)
+        .and_then(|state| state.menu_state.lock().ok().map(|value| *value))
+        .unwrap_or(TrayMenuState { opacity: 0.85, speed: 200.0, font_size: 26.0 });
+
     let menu = CreatePopupMenu().unwrap_or_default();
     let opacity_menu = CreatePopupMenu().unwrap_or_default();
     for (idx, value) in OPACITIES.iter().enumerate() {
         let label = format!("{}%", (value * 100.0) as i32);
-        append_text(opacity_menu, ID_OPACITY_BASE + idx, &label);
+        append_text_checked(opacity_menu, ID_OPACITY_BASE + idx, &label, approx_eq(current.opacity, *value));
     }
 
     let speed_menu = CreatePopupMenu().unwrap_or_default();
     for (idx, (_, label)) in SPEEDS.iter().enumerate() {
-        append_text(speed_menu, ID_SPEED_BASE + idx, label);
+        append_text_checked(speed_menu, ID_SPEED_BASE + idx, label, approx_eq(current.speed, SPEEDS[idx].0));
     }
 
     let font_menu = CreatePopupMenu().unwrap_or_default();
     for (idx, size) in FONT_SIZES.iter().enumerate() {
-        append_text(font_menu, ID_FONT_BASE + idx, &format!("{}px", *size as i32));
+        append_text_checked(font_menu, ID_FONT_BASE + idx, &format!("{}px", *size as i32), approx_eq(current.font_size, *size));
     }
 
     append_popup(menu, opacity_menu, "弹幕透明度");
@@ -194,7 +225,7 @@ unsafe fn show_menu(hwnd: HWND) {
     append_popup(menu, font_menu, "字体大小");
     append_text(menu, ID_BLOCK_KEYWORDS, "弹幕屏蔽关键字...");
     append_text(menu, ID_BLOCK_UIDS, "ID弹幕屏蔽...");
-    append_text(menu, ID_CONNECT, "连接/断开B站直播间...");
+    append_text(menu, ID_CONNECT, "连接B站直播间...");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     append_text(menu, ID_TOGGLE, "切换 编辑/穿透 模式");
     append_text(menu, ID_MODE_DANMAKU, "-> 穿透模式 (默认)");
@@ -205,13 +236,27 @@ unsafe fn show_menu(hwnd: HWND) {
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
-    let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, Some(0), hwnd, None);
+    let selected = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, Some(0), hwnd, None);
+    let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+    if selected.0 != 0 {
+        if let Some(command) = command_from_id(selected.0 as usize) {
+            if let Some(state) = tray_state(hwnd) {
+                let _ = state.tx.send(command);
+            }
+        }
+    }
     let _ = DestroyMenu(menu);
 }
 
 unsafe fn append_text(menu: HMENU, id: usize, label: &str) {
     let wide = wide_string(label);
     let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(wide.as_ptr()));
+}
+
+unsafe fn append_text_checked(menu: HMENU, id: usize, label: &str, checked: bool) {
+    let wide = wide_string(label);
+    let flags = if checked { MF_STRING | MF_CHECKED } else { MF_STRING };
+    let _ = AppendMenuW(menu, flags, id, PCWSTR(wide.as_ptr()));
 }
 
 unsafe fn append_popup(menu: HMENU, submenu: HMENU, label: &str) {
@@ -249,4 +294,79 @@ unsafe fn tray_state(hwnd: HWND) -> Option<&'static mut TrayState> {
 
 fn wide_string(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn approx_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() < 0.01
+}
+
+unsafe fn create_wan_icon(instance: HINSTANCE) -> windows::core::Result<HICON> {
+    let width = 32_usize;
+    let height = 32_usize;
+    let mut xor = vec![0_u8; width * height * 4];
+    let and = vec![0_u8; width * height / 8];
+
+    for y in 0..height {
+        for x in 0..width {
+            set_pixel(&mut xor, width, x, y, [255, 170, 0, 255]);
+        }
+    }
+
+    draw_text_wan(&mut xor, width);
+    CreateIcon(Some(instance), width as i32, height as i32, 1, 32, and.as_ptr(), xor.as_ptr())
+}
+
+fn draw_text_wan(buffer: &mut [u8], width: usize) {
+    draw_glyph(buffer, width, 3, 12, &[
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10101,
+        0b10101,
+        0b10101,
+        0b01010,
+    ]);
+    draw_glyph(buffer, width, 13, 12, &[
+        0b01110,
+        0b00001,
+        0b01111,
+        0b10001,
+        0b10001,
+        0b10011,
+        0b01101,
+    ]);
+    draw_glyph(buffer, width, 23, 12, &[
+        0b11110,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+        0b10001,
+    ]);
+}
+
+fn draw_glyph(buffer: &mut [u8], width: usize, x: usize, y: usize, rows: &[u8]) {
+    for (row, bits) in rows.iter().enumerate() {
+        for col in 0..5 {
+            if bits & (1 << (4 - col)) != 0 {
+                fill_rect(buffer, width, x + col * 2, y + row * 2, 2, 2, [255, 255, 255, 255]);
+            }
+        }
+    }
+}
+
+fn fill_rect(buffer: &mut [u8], width: usize, x: usize, y: usize, w: usize, h: usize, bgra: [u8; 4]) {
+    for yy in y..(y + h).min(32) {
+        for xx in x..(x + w).min(32) {
+            set_pixel(buffer, width, xx, yy, bgra);
+        }
+    }
+}
+
+fn set_pixel(buffer: &mut [u8], width: usize, x: usize, y: usize, bgra: [u8; 4]) {
+    let idx = (y * width + x) * 4;
+    if idx + 3 < buffer.len() {
+        buffer[idx..idx + 4].copy_from_slice(&bgra);
+    }
 }

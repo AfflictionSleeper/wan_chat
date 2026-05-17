@@ -26,7 +26,7 @@ pub fn run() -> anyhow::Result<()> {
     let mut engine = DanmakuEngine::new(config.danmaku.clone());
     let (command_tx, command_rx) = mpsc::channel::<AppCommand>();
     let (bili_tx, bili_rx) = mpsc::channel::<BilibiliEvent>();
-    let _tray = TrayController::new(command_tx)?;
+    let tray = TrayController::new(command_tx, &config.danmaku)?;
     let mut bili_client = BilibiliClient::new(bili_tx);
 
     if config.bilibili.room_id > 0 && !config.bilibili.cookie.is_empty() {
@@ -41,7 +41,7 @@ pub fn run() -> anyhow::Result<()> {
         }
 
         while let Ok(command) = command_rx.try_recv() {
-            if handle_command(command, &window, &mut renderer, &mut engine, &mut config, &mut bili_client)? {
+            if handle_command(command, &window, &tray, &mut renderer, &mut engine, &mut config, &mut bili_client)? {
                 return Ok(());
             }
         }
@@ -67,6 +67,7 @@ pub fn run() -> anyhow::Result<()> {
 fn handle_command(
     command: AppCommand,
     window: &OverlayWindow,
+    tray: &TrayController,
     renderer: &mut D2DRenderer,
     engine: &mut DanmakuEngine,
     config: &mut Config,
@@ -85,24 +86,26 @@ fn handle_command(
             config.danmaku.opacity = value.clamp(0.1, 1.0);
             window.set_opacity(config.danmaku.opacity, OverlayMode::from_config(&config.mode))?;
             config.save()?;
+            tray.update_settings(&config.danmaku);
         }
         AppCommand::SetSpeed(value) => {
             config.danmaku.speed = value;
             engine.set_config(config.danmaku.clone());
             config.save()?;
+            tray.update_settings(&config.danmaku);
         }
         AppCommand::SetFontSize(value) => {
             config.danmaku.font_size = value;
             engine.set_config(config.danmaku.clone());
             config.save()?;
+            tray.update_settings(&config.danmaku);
         }
         AppCommand::ConnectDialog => {
-            if bili_client.is_connected() {
-                bili_client.disconnect();
-            } else if let Some((room_id, cookie)) = show_connect_dialog(window.hwnd(), config.bilibili.room_id, &config.bilibili.cookie) {
+            if let Some((room_id, cookie)) = show_connect_dialog(config.bilibili.room_id, &config.bilibili.cookie) {
                 config.bilibili.room_id = room_id;
                 config.bilibili.cookie = normalize_cookie(&cookie);
                 config.save()?;
+                bili_client.disconnect();
                 bili_client.connect(config.bilibili.room_id, config.bilibili.cookie.clone());
             }
         }

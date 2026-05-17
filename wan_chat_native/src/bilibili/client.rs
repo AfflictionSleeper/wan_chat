@@ -75,9 +75,6 @@ impl BilibiliClient {
         self.running.store(false, Ordering::Relaxed);
     }
 
-    pub fn is_connected(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
-    }
 }
 
 async fn run_client(room_id: u64, cookie: String, tx: Sender<BilibiliEvent>, running: Arc<AtomicBool>) -> anyhow::Result<()> {

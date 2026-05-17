@@ -100,7 +100,7 @@ impl D2DRenderer {
             self.text_brush.SetColor(&text_color as *const _);
             self.outline_brush.SetColor(&outline_color as *const _);
 
-            for (dx, dy) in [(-1.0_f32, 0.0_f32), (1.0, 0.0), (0.0, 1.0)] {
+            for (dx, dy) in [(-0.5_f32, 0.0_f32), (0.5, 0.0), (0.0, 0.5)] {
                 let rect = rect_for(item, dx, dy);
                 self.target.DrawText(
                     &text,
