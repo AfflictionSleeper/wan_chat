@@ -43,6 +43,7 @@ WanChat.exe
 4. 可选填写 B 站 Cookie。
 5. 点击 `连接`。
 6. 软件为本地软件不会上传任何信息。如何获取cookie如下
+   
    打开b站确保登陆->按键盘F12->找到网络->随便在列出的地址里多点一点，找到有cookie的复制整个然后填入软件。
    <img width="2534" height="830" alt="image" src="https://github.com/user-attachments/assets/0e5b41e1-6874-4fa8-9a02-5e0efb3adf95" />
    <img width="353" height="230" alt="image" src="https://github.com/user-attachments/assets/c2be49a3-2f92-4c27-8d8a-856d054cb60e" />
@@ -90,6 +91,7 @@ WanChat.exe
 
 ## 弹幕设置
 右键菜单
+
 <img width="289" height="261" alt="image" src="https://github.com/user-attachments/assets/6e032c07-4886-46b1-851e-30a316469f5a" />
 
 
