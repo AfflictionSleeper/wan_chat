@@ -89,6 +89,9 @@ WanChat.exe
 该选项会在编辑模式和穿透模式之间切换。
 
 ## 弹幕设置
+右键菜单
+<img width="289" height="261" alt="image" src="https://github.com/user-attachments/assets/6e032c07-4886-46b1-851e-30a316469f5a" />
+
 
 ### 透明度
 
