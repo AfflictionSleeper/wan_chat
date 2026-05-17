@@ -31,7 +31,8 @@ WanChat.exe
 
 程序启动后会出现在系统托盘。右键托盘图标即可打开菜单。建议不要将软件放在c盘或者桌面。
 
-<img width="357" height="284" alt="image" src="https://github.com/user-attachments/assets/5f025481-59aa-45e0-9c23-ed8df4bad5a6" />
+<img width="157" height="107" alt="image" src="https://github.com/user-attachments/assets/9d4905bc-2040-4396-91d9-d50e441dfc6d" />
+
 
 
 
