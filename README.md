@@ -1,6 +1,8 @@
 # WanChat
 
-WanChat 是一个用于 B 站直播间弹幕显示的桌面悬浮弹幕工具。它可以把直播间弹幕以透明悬浮层的形式显示在屏幕上，并支持鼠标穿透、窗口编辑、字体/透明度调整、关键字屏蔽和用户 ID 屏蔽。
+WanChat 是一个用于 B 站直播间弹幕显示的桌面悬浮弹幕工具。它可以把直播间弹幕以透明悬浮层的形式显示在屏幕上，并支持鼠标穿透、窗口编辑、字体/透明度调整、关键字屏蔽和用户 ID 屏蔽，整体效果如下。
+<img width="1643" height="1169" alt="image" src="https://github.com/user-attachments/assets/9445c819-c473-41ea-9853-73204cf7dba3" />
+
 
 ## 功能简介
 
@@ -24,41 +26,12 @@ WanChat 是一个用于 B 站直播间弹幕显示的桌面悬浮弹幕工具。
 WanChat.exe
 ```
 
-程序启动后会出现在系统托盘。右键托盘图标即可打开菜单。
+程序启动后会出现在系统托盘。右键托盘图标即可打开菜单。建议不要将软件放在c盘或者桌面。
 
-### 从源码运行
+<img width="357" height="284" alt="image" src="https://github.com/user-attachments/assets/5f025481-59aa-45e0-9c23-ed8df4bad5a6" />
 
-安装依赖：
 
-```bash
-pip install -r requirements.txt
-```
 
-运行 Windows 版本：
-
-```bash
-python main.py
-```
-
-Linux/WSL 调试版本：
-
-```bash
-python main_wsl.py
-```
-
-## 打包程序
-
-Windows 下直接双击：
-
-```text
-build.bat
-```
-
-打包完成后输出文件为：
-
-```text
-dist\WanChat.exe
-```
 
 ## 基本使用
 
@@ -69,6 +42,12 @@ dist\WanChat.exe
 3. 输入直播间房间号。
 4. 可选填写 B 站 Cookie。
 5. 点击 `连接`。
+6. 软件为本地软件不会上传任何信息。如何获取cookie如下
+   打开b站确保登陆->按键盘F12->找到网络->随便在列出的地址里多点一点，找到有cookie的复制整个然后填入软件。
+   <img width="2534" height="830" alt="image" src="https://github.com/user-attachments/assets/0e5b41e1-6874-4fa8-9a02-5e0efb3adf95" />
+   <img width="353" height="230" alt="image" src="https://github.com/user-attachments/assets/c2be49a3-2f92-4c27-8d8a-856d054cb60e" />
+
+
 
 填写 Cookie 后通常可以获取更完整的用户昵称和弹幕信息。
 
@@ -80,11 +59,14 @@ dist\WanChat.exe
 → 编辑模式 (调整大小/位置)
 ```
 
-编辑模式用于调整弹幕幕布：
+编辑模式用于调整弹幕幕布（编辑模式下幕布是黑色的并且不能穿透操作，记得调整回穿透模式）：
 
 - 按住幕布中间拖动：移动整个幕布
 - 拖动边缘：调整幕布大小
 - 绿色虚线边框表示当前处于编辑模式
+
+  <img width="1910" height="1090" alt="image" src="https://github.com/user-attachments/assets/3b7265f3-b8e4-46bd-9b5d-cf4284313491" />
+
 
 ### 穿透模式
 
@@ -191,38 +173,6 @@ ID弹幕屏蔽...
 987654
 ```
 
-## HTML 字体标签
-
-弹幕内容支持简单 HTML 字体标签，用于设置单条弹幕颜色和大小。
-
-支持写法：
-
-```html
-<font color="red">你好</font>
-<font color="#FF0000">红色弹幕</font>
-<font color="yellow" size="40">黄色大字弹幕</font>
-<font style="color:#00FFFF;font-size:36px">青色弹幕</font>
-```
-
-说明：
-
-- 支持 `color`
-- 支持 `size`
-- 兼容 `style="color:...; font-size:...px"`
-- 显示时会自动去掉 HTML 标签，只显示纯文本
-- 字号限制在 `8-96`
-
-当前不支持这种简写标签：
-
-```html
-<red>你好</red>
-```
-
-请使用：
-
-```html
-<font color="red">你好</font>
-```
 
 ## 配置文件
 
