@@ -30,7 +30,7 @@ echo [3/3] 编译中...
 pyinstaller ^
     --onefile ^
     --windowed ^
-    --name "DanmakuOverlay" ^
+    --name "WanChat" ^
     --add-data "config.json;." ^
     --hidden-import pystray._win32 ^
     --hidden-import pystray._util ^
@@ -51,11 +51,11 @@ if %errorlevel% neq 0 (
 echo.
 echo ========================================
 echo   编译完成！exe 文件在 dist\ 目录下
-echo   文件: dist\DanmakuOverlay.exe
+echo   文件: dist\WanChat.exe
 echo ========================================
 echo.
 echo 使用方法:
-echo   1. 双击 DanmakuOverlay.exe 启动
+echo   1. 双击 WanChat.exe 启动
 echo   2. 任务栏托盘图标右键 -> 菜单控制
 echo   3. 选择"编辑模式"调整窗口位置和大小
 echo   4. 选择"穿透模式"让鼠标穿过窗口操作游戏
