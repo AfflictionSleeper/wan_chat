@@ -129,6 +129,14 @@ COLORREF_TRANSPARENT = 0x00010101  # RGB(1,1,1) 颜色键
 TRANSPARENT_COLOR_HEX = "#010101"  # tkinter 使用的颜色字符串
 TRANSPARENT_COLOR_RGB = (1, 1, 1)
 LINUX_BG_COLOR = "#1a1a1a"
+FRAME_INTERVAL_MS = 8
+
+ICON_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "C:/Windows/Fonts/calibrib.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+]
 
 
 def load_config():
@@ -274,6 +282,8 @@ DANMAKU_COLORS = [
     "#00FFCC", "#FF6699",
 ]
 
+DANMAKU_OUTLINE_OFFSETS = [(-1, 0), (1, 0), (0, 1)]
+
 HTML_COLOR_NAMES = {
     "black": "#000000", "white": "#FFFFFF", "red": "#FF0000",
     "green": "#008000", "blue": "#0000FF", "yellow": "#FFFF00",
@@ -333,6 +343,27 @@ def _normalize_html_font_size(value, fallback):
     if not match:
         return fallback
     return max(8, min(96, int(match.group(0))))
+
+
+def fit_icon_font(draw, ImageFont, text, max_width, max_height):
+    for size in range(28, 9, -1):
+        for font_path in ICON_FONT_CANDIDATES:
+            try:
+                font = ImageFont.truetype(font_path, size)
+                bbox = draw.textbbox((0, 0), text, font=font)
+                width = bbox[2] - bbox[0]
+                height = bbox[3] - bbox[1]
+                if width <= max_width and height <= max_height:
+                    return font, bbox
+            except Exception:
+                pass
+    font = ImageFont.load_default()
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+    except AttributeError:
+        width, height = draw.textsize(text, font=font)
+        bbox = (0, 0, width, height)
+    return font, bbox
 
 
 # ──────────────────────────────────────────────
@@ -442,7 +473,7 @@ class DanmakuEngine:
     def _render_item(self, item):
         try:
             font = self._get_font(item.font_size)
-            for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            for ox, oy in DANMAKU_OUTLINE_OFFSETS:
                 oid = self.canvas.create_text(
                     item.x + ox, item.y + oy,
                     text=item.text,
@@ -472,7 +503,7 @@ class DanmakuEngine:
                 to_remove.append(item)
             elif item.canvas_id is not None:
                 try:
-                    for oid, (ox, oy) in zip(item.outline_ids, [(-1, 0), (1, 0), (0, -1), (0, 1)]):
+                    for oid, (ox, oy) in zip(item.outline_ids, DANMAKU_OUTLINE_OFFSETS):
                         self.canvas.coords(oid, item.x + ox, item.y + oy)
                     self.canvas.coords(item.canvas_id, item.x, item.y)
                 except Exception:
@@ -557,7 +588,7 @@ class OverlayWindow:
         self.root.update_idletasks()
         self.root.update()
         self._apply_window_attrs()
-        self.root.after(16, self._main_loop)
+        self.root.after(FRAME_INTERVAL_MS, self._main_loop)
 
     # ── Win32 窗口管理 ────────────────────────
 
@@ -934,7 +965,7 @@ class OverlayWindow:
             self.engine.update(dt)
         except Exception:
             pass
-        self.root.after(16, self._main_loop)
+        self.root.after(FRAME_INTERVAL_MS, self._main_loop)
 
     def run(self):
         self.root.mainloop()
@@ -954,7 +985,7 @@ class OverlayWindow:
 
 def create_tray_icon(overlay, config):
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image, ImageDraw, ImageFont
         import pystray
     except ImportError:
         return None
@@ -965,7 +996,15 @@ def create_tray_icon(overlay, config):
         draw.rounded_rectangle([4, 4, 60, 60], radius=14, fill=(0, 170, 255, 255))
     except AttributeError:
         draw.ellipse([4, 4, 60, 60], fill=(0, 170, 255, 255))
-    draw.text((16, 14), "D", fill=(255, 255, 255, 255))
+    icon_text = "Wan"
+    icon_font, bbox = fit_icon_font(draw, ImageFont, icon_text, 52, 34)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(
+        ((64 - tw) / 2 - bbox[0], (64 - th) / 2 - bbox[1]),
+        icon_text,
+        fill=(255, 255, 255, 255),
+        font=icon_font,
+    )
 
     state = {"overlay": overlay, "config": config}
 
