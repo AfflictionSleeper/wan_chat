@@ -69,7 +69,7 @@ impl D2DRenderer {
 
             self.target.BeginDraw();
             let bg = if self.edit_mode {
-                D2D1_COLOR_F { r: 0.10, g: 0.10, b: 0.10, a: 1.0 }
+                D2D1_COLOR_F { r: 0.02, g: 0.02, b: 0.02, a: 0.70 }
             } else {
                 TRANSPARENT_COLOR
             };

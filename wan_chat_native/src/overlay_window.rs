@@ -117,7 +117,7 @@ impl OverlayWindow {
 
     pub fn set_opacity(&self, opacity: f32, mode: OverlayMode) -> anyhow::Result<()> {
         unsafe {
-            let alpha = if mode == OverlayMode::Edit { 255 } else { (opacity.clamp(0.1, 1.0) * 255.0) as u8 };
+            let alpha = if mode == OverlayMode::Edit { 180 } else { (opacity.clamp(0.1, 1.0) * 255.0) as u8 };
             let flags = if mode == OverlayMode::Edit { LWA_ALPHA } else { LWA_COLORKEY | LWA_ALPHA };
             let color_key = if mode == OverlayMode::Edit { 0 } else { TRANSPARENT_COLOR };
             SetLayeredWindowAttributes(self.hwnd, COLORREF(color_key), alpha, flags)?;

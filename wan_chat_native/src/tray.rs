@@ -10,14 +10,15 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, GetWindowLongPtrW, LoadIconW, PostMessageW,
+    DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, GetWindowLongPtrW, LoadIconW,
+    PostMessageW,
     PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    TrackPopupMenu, HICON, HMENU, IDI_APPLICATION, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE,
+    TrackPopupMenu, HICON, HMENU, IDI_APPLICATION, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_APP, WM_COMMAND, WM_DESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, GWLP_USERDATA,
 };
 
-use crate::config::DanmakuConfig;
+use crate::config::{DanmakuConfig, DanmakuDirection};
 use crate::overlay_window::OverlayMode;
 
 const CLASS_NAME: PCWSTR = w!("WanChatNativeTray");
@@ -27,6 +28,7 @@ const WM_TRAYICON: u32 = WM_APP + 1;
 const ID_OPACITY_BASE: usize = 1100;
 const ID_SPEED_BASE: usize = 1200;
 const ID_FONT_BASE: usize = 1300;
+const ID_DIRECTION_BASE: usize = 1400;
 const ID_BLOCK_KEYWORDS: usize = 2001;
 const ID_BLOCK_UIDS: usize = 2002;
 const ID_CONNECT: usize = 2003;
@@ -48,6 +50,12 @@ const SPEEDS: [(f32, &str); 9] = [
     (650.0, "超快"),
 ];
 const FONT_SIZES: [f32; 20] = [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 32.0, 36.0, 40.0, 48.0, 56.0];
+const DIRECTIONS: [(DanmakuDirection, &str); 4] = [
+    (DanmakuDirection::Right, "从右发射"),
+    (DanmakuDirection::Left, "从左发射"),
+    (DanmakuDirection::Top, "从上发射"),
+    (DanmakuDirection::Bottom, "从下发射"),
+];
 
 #[derive(Debug, Clone)]
 pub enum AppCommand {
@@ -56,6 +64,7 @@ pub enum AppCommand {
     SetOpacity(f32),
     SetSpeed(f32),
     SetFontSize(f32),
+    SetDirection(DanmakuDirection),
     ConnectDialog,
     BlockKeywordsDialog,
     BlockUserIdsDialog,
@@ -72,11 +81,13 @@ struct TrayMenuState {
     opacity: f32,
     speed: f32,
     font_size: f32,
+    direction: DanmakuDirection,
 }
 
 pub struct TrayController {
     hwnd: HWND,
     icon: HICON,
+    owns_icon: bool,
     menu_state: Arc<Mutex<TrayMenuState>>,
 }
 
@@ -104,9 +115,11 @@ impl TrayController {
             let menu_state = Arc::new(Mutex::new(TrayMenuState::from_config(config)));
             let state = Box::new(TrayState { tx, menu_state: menu_state.clone() });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
-            let icon = create_wan_icon(instance).or_else(|_| LoadIconW(None, IDI_APPLICATION))?;
+            let (icon, owns_icon) = create_pagoda_icon(instance)
+                .map(|icon| (icon, true))
+                .or_else(|_| LoadIconW(None, IDI_APPLICATION).map(|icon| (icon, false)))?;
             add_icon(hwnd, icon)?;
-            Ok(Self { hwnd, icon, menu_state })
+            Ok(Self { hwnd, icon, owns_icon, menu_state })
         }
     }
 
@@ -127,7 +140,9 @@ impl Drop for TrayController {
                 drop(Box::from_raw(state));
                 SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
             }
-            let _ = DestroyIcon(self.icon);
+            if self.owns_icon {
+                let _ = DestroyIcon(self.icon);
+            }
             let _ = DestroyWindow(self.hwnd);
         }
     }
@@ -135,7 +150,7 @@ impl Drop for TrayController {
 
 impl TrayMenuState {
     fn from_config(config: &DanmakuConfig) -> Self {
-        Self { opacity: config.opacity, speed: config.speed, font_size: config.font_size }
+        Self { opacity: config.opacity, speed: config.speed, font_size: config.font_size, direction: config.direction }
     }
 }
 
@@ -201,7 +216,7 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
 unsafe fn show_menu(hwnd: HWND) {
     let current = tray_state(hwnd)
         .and_then(|state| state.menu_state.lock().ok().map(|value| *value))
-        .unwrap_or(TrayMenuState { opacity: 0.85, speed: 200.0, font_size: 26.0 });
+        .unwrap_or(TrayMenuState { opacity: 0.85, speed: 200.0, font_size: 26.0, direction: DanmakuDirection::Right });
 
     let menu = CreatePopupMenu().unwrap_or_default();
     let opacity_menu = CreatePopupMenu().unwrap_or_default();
@@ -220,9 +235,15 @@ unsafe fn show_menu(hwnd: HWND) {
         append_text_checked(font_menu, ID_FONT_BASE + idx, &format!("{}px", *size as i32), approx_eq(current.font_size, *size));
     }
 
+    let direction_menu = CreatePopupMenu().unwrap_or_default();
+    for (idx, (direction, label)) in DIRECTIONS.iter().enumerate() {
+        append_text_checked(direction_menu, ID_DIRECTION_BASE + idx, label, current.direction == *direction);
+    }
+
     append_popup(menu, opacity_menu, "弹幕透明度");
     append_popup(menu, speed_menu, "弹幕速度");
     append_popup(menu, font_menu, "字体大小");
+    append_popup(menu, direction_menu, "弹幕方向");
     append_text(menu, ID_BLOCK_KEYWORDS, "弹幕屏蔽关键字...");
     append_text(menu, ID_BLOCK_UIDS, "ID弹幕屏蔽...");
     append_text(menu, ID_CONNECT, "连接B站直播间...");
@@ -274,6 +295,9 @@ fn command_from_id(id: usize) -> Option<AppCommand> {
     if (ID_FONT_BASE..ID_FONT_BASE + FONT_SIZES.len()).contains(&id) {
         return Some(AppCommand::SetFontSize(FONT_SIZES[id - ID_FONT_BASE]));
     }
+    if (ID_DIRECTION_BASE..ID_DIRECTION_BASE + DIRECTIONS.len()).contains(&id) {
+        return Some(AppCommand::SetDirection(DIRECTIONS[id - ID_DIRECTION_BASE].0));
+    }
 
     match id {
         ID_BLOCK_KEYWORDS => Some(AppCommand::BlockKeywordsDialog),
@@ -300,73 +324,103 @@ fn approx_eq(left: f32, right: f32) -> bool {
     (left - right).abs() < 0.01
 }
 
-unsafe fn create_wan_icon(instance: HINSTANCE) -> windows::core::Result<HICON> {
+unsafe fn create_pagoda_icon(instance: HINSTANCE) -> windows::core::Result<HICON> {
     let width = 32_usize;
     let height = 32_usize;
     let mut xor = vec![0_u8; width * height * 4];
-    let and = vec![0_u8; width * height / 8];
+    let mut and = vec![0xff_u8; width * height / 8];
 
-    for y in 0..height {
-        for x in 0..width {
-            set_pixel(&mut xor, width, x, y, [255, 170, 0, 255]);
-        }
-    }
-
-    draw_text_wan(&mut xor, width);
+    draw_pagoda(&mut xor, &mut and, width);
     CreateIcon(Some(instance), width as i32, height as i32, 1, 32, and.as_ptr(), xor.as_ptr())
 }
 
-fn draw_text_wan(buffer: &mut [u8], width: usize) {
-    draw_glyph(buffer, width, 3, 12, &[
-        0b10001,
-        0b10001,
-        0b10001,
-        0b10101,
-        0b10101,
-        0b10101,
-        0b01010,
-    ]);
-    draw_glyph(buffer, width, 13, 12, &[
-        0b01110,
-        0b00001,
-        0b01111,
-        0b10001,
-        0b10001,
-        0b10011,
-        0b01101,
-    ]);
-    draw_glyph(buffer, width, 23, 12, &[
-        0b11110,
-        0b10001,
-        0b10001,
-        0b10001,
-        0b10001,
-        0b10001,
-        0b10001,
-    ]);
+fn draw_pagoda(buffer: &mut [u8], mask: &mut [u8], width: usize) {
+    let outline = [18, 9, 5, 255];
+    let gold = [0, 190, 255, 255];
+    let gold_light = [40, 245, 255, 255];
+    let red = [10, 24, 210, 255];
+    let red_dark = [0, 0, 110, 255];
+    let roof = [58, 54, 62, 255];
+    let roof_light = [100, 96, 110, 255];
+    let wood = [18, 52, 110, 255];
+    let light = [40, 245, 255, 255];
+
+    fill_rect(buffer, mask, width, 14, 1, 4, 4, gold_light);
+    fill_rect(buffer, mask, width, 13, 5, 6, 2, gold);
+    draw_line(buffer, mask, width, 4, 14, 16, 5, outline);
+    draw_line(buffer, mask, width, 28, 14, 16, 5, outline);
+    draw_line(buffer, mask, width, 5, 13, 16, 6, gold);
+    draw_line(buffer, mask, width, 27, 13, 16, 6, gold);
+    draw_line(buffer, mask, width, 6, 14, 16, 8, gold_light);
+    draw_line(buffer, mask, width, 26, 14, 16, 8, gold_light);
+
+    fill_rect(buffer, mask, width, 7, 13, 18, 5, roof);
+    fill_rect(buffer, mask, width, 9, 14, 14, 2, roof_light);
+    fill_rect(buffer, mask, width, 5, 17, 22, 3, red_dark);
+    fill_rect(buffer, mask, width, 7, 18, 18, 2, red);
+    fill_rect(buffer, mask, width, 12, 15, 8, 5, outline);
+    fill_rect(buffer, mask, width, 13, 16, 6, 3, gold);
+    set_pixel(buffer, mask, width, 16, 17, [0, 255, 255, 255]);
+
+    fill_rect(buffer, mask, width, 6, 20, 20, 9, red);
+    fill_rect(buffer, mask, width, 8, 20, 4, 10, red_dark);
+    fill_rect(buffer, mask, width, 20, 20, 4, 10, red_dark);
+    fill_rect(buffer, mask, width, 13, 22, 6, 7, wood);
+    fill_rect(buffer, mask, width, 9, 23, 3, 3, light);
+    fill_rect(buffer, mask, width, 20, 23, 3, 3, light);
+    fill_rect(buffer, mask, width, 11, 21, 10, 1, gold);
+    fill_rect(buffer, mask, width, 5, 29, 22, 2, [130, 130, 150, 255]);
+
+    fill_rect(buffer, mask, width, 2, 18, 3, 7, gold);
+    fill_rect(buffer, mask, width, 27, 18, 3, 7, gold);
+    fill_rect(buffer, mask, width, 3, 20, 2, 4, light);
+    fill_rect(buffer, mask, width, 27, 20, 2, 4, light);
+    fill_rect(buffer, mask, width, 3, 25, 1, 3, red);
+    fill_rect(buffer, mask, width, 28, 25, 1, 3, red);
 }
 
-fn draw_glyph(buffer: &mut [u8], width: usize, x: usize, y: usize, rows: &[u8]) {
-    for (row, bits) in rows.iter().enumerate() {
-        for col in 0..5 {
-            if bits & (1 << (4 - col)) != 0 {
-                fill_rect(buffer, width, x + col * 2, y + row * 2, 2, 2, [255, 255, 255, 255]);
-            }
+fn draw_line(buffer: &mut [u8], mask: &mut [u8], width: usize, mut x0: i32, mut y0: i32, x1: i32, y1: i32, bgra: [u8; 4]) {
+    let dx = (x1 - x0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let dy = -(y1 - y0).abs();
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    loop {
+        if x0 >= 0 && y0 >= 0 {
+            fill_rect(buffer, mask, width, x0 as usize, y0 as usize, 2, 2, bgra);
+        }
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
         }
     }
 }
 
-fn fill_rect(buffer: &mut [u8], width: usize, x: usize, y: usize, w: usize, h: usize, bgra: [u8; 4]) {
+fn fill_rect(buffer: &mut [u8], mask: &mut [u8], width: usize, x: usize, y: usize, w: usize, h: usize, bgra: [u8; 4]) {
     for yy in y..(y + h).min(32) {
         for xx in x..(x + w).min(32) {
-            set_pixel(buffer, width, xx, yy, bgra);
+            set_pixel(buffer, mask, width, xx, yy, bgra);
         }
     }
 }
 
-fn set_pixel(buffer: &mut [u8], width: usize, x: usize, y: usize, bgra: [u8; 4]) {
+fn set_pixel(buffer: &mut [u8], mask: &mut [u8], width: usize, x: usize, y: usize, bgra: [u8; 4]) {
     let idx = (y * width + x) * 4;
     if idx + 3 < buffer.len() {
         buffer[idx..idx + 4].copy_from_slice(&bgra);
+        let mask_idx = y * (width / 8) + x / 8;
+        let bit = 0x80 >> (x % 8);
+        if mask_idx < mask.len() {
+            mask[mask_idx] &= !bit;
+        }
     }
 }

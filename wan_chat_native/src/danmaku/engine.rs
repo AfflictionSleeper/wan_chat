@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::config::DanmakuConfig;
+use crate::config::{DanmakuConfig, DanmakuDirection};
 
 use super::filter::DanmakuFilter;
 use super::item::{DanmakuItem, TextStyle};
@@ -56,11 +56,23 @@ impl DanmakuEngine {
     }
 
     pub fn update(&mut self, dt: f32, window_width: f32, window_height: f32) {
+        let direction = self.config.direction;
         for item in &mut self.active {
-            item.x -= item.speed * dt;
+            let step = item.speed * dt;
+            match direction {
+                DanmakuDirection::Right => item.x -= step,
+                DanmakuDirection::Left => item.x += step,
+                DanmakuDirection::Top => item.y += step,
+                DanmakuDirection::Bottom => item.y -= step,
+            }
         }
 
-        self.active.retain(|item| item.x + item.width > 0.0);
+        self.active.retain(|item| match direction {
+            DanmakuDirection::Right => item.x + item.width > 0.0,
+            DanmakuDirection::Left => item.x < window_width,
+            DanmakuDirection::Top => item.y < window_height,
+            DanmakuDirection::Bottom => item.y + item.height > 0.0,
+        });
         self.spawn_pending(dt, window_width, window_height);
     }
 
@@ -107,6 +119,13 @@ impl DanmakuEngine {
     }
 
     fn find_spawn_position(&mut self, item: &DanmakuItem, window_width: f32, window_height: f32) -> Option<(f32, f32)> {
+        match self.config.direction {
+            DanmakuDirection::Right | DanmakuDirection::Left => self.find_horizontal_spawn_position(item, window_width, window_height),
+            DanmakuDirection::Top | DanmakuDirection::Bottom => self.find_vertical_spawn_position(item, window_width, window_height),
+        }
+    }
+
+    fn find_horizontal_spawn_position(&mut self, item: &DanmakuItem, window_width: f32, window_height: f32) -> Option<(f32, f32)> {
         let track_height = (item.height.max(self.config.font_size * 1.45) + 8.0).max(24.0);
         let track_count = ((window_height - 16.0).max(track_height) / track_height).floor().max(1.0) as usize;
         let start_track = self.rand_usize(track_count);
@@ -116,7 +135,31 @@ impl DanmakuEngine {
             let track = (start_track + offset) % track_count;
             let y_jitter = self.rand_range(0.0, (track_height - item.height).max(0.0));
             let y = 8.0 + track as f32 * track_height + y_jitter;
-            let x = window_width + self.rand_range(24.0, 120.0);
+            let x = match self.config.direction {
+                DanmakuDirection::Right => window_width + self.rand_range(24.0, 120.0),
+                DanmakuDirection::Left => -item.width - self.rand_range(24.0, 120.0),
+                _ => unreachable!(),
+            };
+
+            if self.is_spawn_area_clear(x, y, item) {
+                return Some((x, y));
+            }
+        }
+
+        None
+    }
+
+    fn find_vertical_spawn_position(&mut self, item: &DanmakuItem, window_width: f32, window_height: f32) -> Option<(f32, f32)> {
+        let max_x = (window_width - item.width - 8.0).max(8.0);
+        let attempts = self.config.render_budget.max(8);
+
+        for _ in 0..attempts {
+            let x = if max_x <= 8.0 { 8.0 } else { self.rand_range(8.0, max_x) };
+            let y = match self.config.direction {
+                DanmakuDirection::Top => -item.height - self.rand_range(16.0, 96.0),
+                DanmakuDirection::Bottom => window_height + self.rand_range(16.0, 96.0),
+                _ => unreachable!(),
+            };
 
             if self.is_spawn_area_clear(x, y, item) {
                 return Some((x, y));
@@ -131,11 +174,26 @@ impl DanmakuEngine {
         let new_top = spawn_y;
         let new_bottom = spawn_y + new_item.height;
 
-        !self.active.iter().any(|item| {
-            let item_top = item.y;
-            let item_bottom = item.y + item.height;
-            let vertically_overlaps = new_top < item_bottom + 2.0 && new_bottom + 2.0 > item_top;
-            vertically_overlaps && item.x + item.width + safe_gap > spawn_x
+        let new_left = spawn_x;
+        let new_right = spawn_x + new_item.width;
+
+        !self.active.iter().any(|item| match self.config.direction {
+            DanmakuDirection::Right => {
+                let vertically_overlaps = new_top < item.y + item.height + 2.0 && new_bottom + 2.0 > item.y;
+                vertically_overlaps && item.x + item.width + safe_gap > spawn_x
+            }
+            DanmakuDirection::Left => {
+                let vertically_overlaps = new_top < item.y + item.height + 2.0 && new_bottom + 2.0 > item.y;
+                vertically_overlaps && item.x < new_right + safe_gap
+            }
+            DanmakuDirection::Top => {
+                let horizontally_overlaps = new_left < item.x + item.width + 2.0 && new_right + 2.0 > item.x;
+                horizontally_overlaps && item.y < new_bottom + safe_gap
+            }
+            DanmakuDirection::Bottom => {
+                let horizontally_overlaps = new_left < item.x + item.width + 2.0 && new_right + 2.0 > item.x;
+                horizontally_overlaps && item.y + item.height + safe_gap > spawn_y
+            }
         })
     }
 

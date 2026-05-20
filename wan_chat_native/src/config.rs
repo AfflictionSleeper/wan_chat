@@ -24,11 +24,28 @@ pub struct DanmakuConfig {
     pub font_size: f32,
     pub speed: f32,
     pub opacity: f32,
+    #[serde(default)]
+    pub direction: DanmakuDirection,
     pub max_items: usize,
     pub render_budget: usize,
     pub pending_limit: usize,
     pub blocked_keywords: Vec<String>,
     pub blocked_user_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DanmakuDirection {
+    Right,
+    Left,
+    Top,
+    Bottom,
+}
+
+impl Default for DanmakuDirection {
+    fn default() -> Self {
+        Self::Right
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +62,7 @@ impl Default for Config {
                 font_size: 26.0,
                 speed: 200.0,
                 opacity: 0.85,
+                direction: DanmakuDirection::Right,
                 max_items: 500,
                 render_budget: 40,
                 pending_limit: 3000,
@@ -61,10 +79,13 @@ impl Config {
     pub fn load_or_default() -> Self {
         let path = config_path();
         let Ok(raw) = fs::read_to_string(path) else {
-            return Self::default();
+            let mut config = Self::default();
+            let _ = config.save();
+            return config;
         };
-        let mut config: Self = serde_json::from_str(&raw).unwrap_or_default();
+        let mut config: Self = serde_json::from_str(&raw).unwrap_or_else(|_| Self::default());
         config.normalize();
+        let _ = config.save();
         config
     }
 

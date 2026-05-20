@@ -7,7 +7,7 @@ use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, Tr
 use crate::bilibili::client::{BilibiliClient, BilibiliEvent};
 use crate::config::{normalize_cookie, normalize_keywords, normalize_user_ids, Config};
 use crate::danmaku::engine::DanmakuEngine;
-use crate::dialogs::{show_connect_dialog, show_error, show_multiline_dialog};
+use crate::dialogs::{show_connect_dialog, show_multiline_dialog};
 use crate::overlay_window::{OverlayMode, OverlayWindow};
 use crate::renderer::d2d::D2DRenderer;
 use crate::tray::{AppCommand, TrayController};
@@ -48,7 +48,7 @@ pub fn run() -> anyhow::Result<()> {
 
         while let Ok(event) = bili_rx.try_recv() {
             if event.session_id() == bili_client.session_id() {
-                handle_bili_event(event, &mut engine, window.hwnd());
+                handle_bili_event(event, &mut engine, &mut config, &mut bili_client)?;
             }
         }
 
@@ -102,15 +102,15 @@ fn handle_command(
             config.save()?;
             tray.update_settings(&config.danmaku);
         }
+        AppCommand::SetDirection(direction) => {
+            config.danmaku.direction = direction;
+            engine.clear_all();
+            engine.set_config(config.danmaku.clone());
+            config.save()?;
+            tray.update_settings(&config.danmaku);
+        }
         AppCommand::ConnectDialog => {
-            if let Some((room_id, cookie)) = show_connect_dialog(config.bilibili.room_id, &config.bilibili.cookie) {
-                config.bilibili.room_id = room_id;
-                config.bilibili.cookie = normalize_cookie(&cookie);
-                config.save()?;
-                engine.clear_all();
-                bili_client.disconnect();
-                bili_client.connect(config.bilibili.room_id, config.bilibili.cookie.clone());
-            }
+            reconnect_from_dialog(config, engine, bili_client)?;
         }
         AppCommand::BlockKeywordsDialog => {
             let current = config.danmaku.blocked_keywords.join("\r\n");
@@ -150,7 +150,12 @@ fn apply_mode(window: &OverlayWindow, renderer: &mut D2DRenderer, config: &mut C
     Ok(())
 }
 
-fn handle_bili_event(event: BilibiliEvent, engine: &mut DanmakuEngine, owner: windows::Win32::Foundation::HWND) {
+fn handle_bili_event(
+    event: BilibiliEvent,
+    engine: &mut DanmakuEngine,
+    config: &mut Config,
+    bili_client: &mut BilibiliClient,
+) -> anyhow::Result<()> {
     match event {
         BilibiliEvent::Danmaku { message, .. } => {
             let text = if message.username.trim().is_empty() {
@@ -165,9 +170,34 @@ fn handle_bili_event(event: BilibiliEvent, engine: &mut DanmakuEngine, owner: wi
         }
         BilibiliEvent::Error { message: error, .. } => {
             eprintln!("[Bili Error] {error}");
-            show_error(owner, &error);
+            if !is_transient_websocket_error(&error) {
+                reconnect_from_dialog(config, engine, bili_client)?;
+            }
         }
     }
+
+    Ok(())
+}
+
+fn reconnect_from_dialog(config: &mut Config, engine: &mut DanmakuEngine, bili_client: &mut BilibiliClient) -> anyhow::Result<()> {
+    if let Some((room_id, cookie)) = show_connect_dialog(config.bilibili.room_id, &config.bilibili.cookie) {
+        config.bilibili.room_id = room_id;
+        config.bilibili.cookie = normalize_cookie(&cookie);
+        config.save()?;
+        engine.clear_all();
+        bili_client.disconnect();
+        bili_client.connect(config.bilibili.room_id, config.bilibili.cookie.clone());
+    }
+
+    Ok(())
+}
+
+fn is_transient_websocket_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("connection reset")
+        || lower.contains("without closing handshake")
+        || lower.contains("already closed")
+        || lower.contains("connection closed")
 }
 
 fn pump_messages() -> bool {

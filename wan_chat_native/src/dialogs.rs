@@ -1,25 +1,29 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetKeyState, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
-    LoadCursorW, MessageBoxW, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
+    LoadCursorW, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_DEFPUSHBUTTON, CS_HREDRAW, CS_VREDRAW,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, GWLP_USERDATA,
-    HMENU, HWND_TOPMOST, IDC_ARROW, MB_ICONERROR, MB_OK, MSG, SW_SHOW, SWP_NOMOVE,
+    HMENU, HWND_TOPMOST, IDC_ARROW, MSG, SW_SHOW, SWP_NOMOVE,
     SWP_NOSIZE, SWP_SHOWWINDOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-    WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
-    WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
+    WNDCLASSW, WM_KEYDOWN, WM_PASTE, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPED,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 const CLASS_NAME: PCWSTR = w!("WanChatNativeInputDialog");
 const ID_EDIT: usize = 1001;
 const ID_ROOM_EDIT: usize = 1002;
 const ID_COOKIE_EDIT: usize = 1003;
+const ID_PASTE_COOKIE: usize = 1004;
 const ID_OK: usize = 1;
 const ID_CANCEL: usize = 2;
+const EM_SETLIMITTEXT: u32 = 0x00C5;
+const EM_SETSEL: u32 = 0x00B1;
+const VK_CONTROL_KEY: i32 = 0x11;
 
 struct DialogState {
     edits: Vec<HWND>,
@@ -37,14 +41,6 @@ pub fn show_connect_dialog(saved_room: u64, saved_cookie: &str) -> Option<(u64, 
 
 pub fn show_multiline_dialog(owner: HWND, title: &str, label: &str, initial: &str) -> Option<String> {
     show_text_dialog(owner, title, label, initial, true, true)
-}
-
-pub fn show_error(owner: HWND, message: &str) {
-    unsafe {
-        let title = wide_string("WanChat 错误");
-        let message = wide_string(message);
-        let _ = MessageBoxW(Some(owner), PCWSTR(message.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONERROR);
-    }
 }
 
 fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: bool, multiline: bool) -> Option<String> {
@@ -154,6 +150,9 @@ fn show_text_dialog(owner: HWND, title: &str, label: &str, initial: &str, wide: 
 
         let mut msg = MSG::default();
         while IsWindow(Some(hwnd)).as_bool() && !state.done && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if handle_dialog_shortcut(hwnd, &msg) {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -172,8 +171,8 @@ fn show_connect_form(room_initial: &str, cookie_initial: &str) -> Option<Vec<Str
         let instance = HINSTANCE(module.0);
         register_class(instance).ok()?;
 
-        let width = 560;
-        let height = 220;
+        let width = 620;
+        let height = 320;
         let title_w = wide_string("连接B站直播间");
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST,
@@ -199,7 +198,8 @@ fn show_connect_form(room_initial: &str, cookie_initial: &str) -> Option<Vec<Str
         set_text(room_edit, room_initial);
 
         create_static(hwnd, instance, "Cookie（保存在本地 config.json，不会上传到其他地方）:", 14, 76, width - 34, 22)?;
-        let cookie_edit = create_edit(hwnd, instance, ID_COOKIE_EDIT, 14, 102, width - 34, 26, false)?;
+        let cookie_edit = create_edit(hwnd, instance, ID_COOKIE_EDIT, 14, 102, width - 34, 104, true)?;
+        let _ = SendMessageW(cookie_edit, EM_SETLIMITTEXT, Some(WPARAM(1024 * 1024)), Some(LPARAM(0)));
         set_text(cookie_edit, cookie_initial);
 
         state.edits.push(room_edit);
@@ -207,13 +207,28 @@ fn show_connect_form(room_initial: &str, cookie_initial: &str) -> Option<Vec<Str
 
         let ok_w = wide_string("连接");
         let cancel_w = wide_string("取消");
+        let paste_w = wide_string("粘贴Cookie");
+        let _paste = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(paste_w.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            14,
+            224,
+            108,
+            28,
+            Some(hwnd),
+            Some(control_id(ID_PASTE_COOKIE)),
+            Some(instance),
+            None,
+        ).ok()?;
         let _ok = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("BUTTON"),
             PCWSTR(ok_w.as_ptr()),
             WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | BS_DEFPUSHBUTTON as u32),
             width - 190,
-            150,
+            224,
             76,
             28,
             Some(hwnd),
@@ -227,7 +242,7 @@ fn show_connect_form(room_initial: &str, cookie_initial: &str) -> Option<Vec<Str
             PCWSTR(cancel_w.as_ptr()),
             WS_CHILD | WS_VISIBLE,
             width - 104,
-            150,
+            224,
             76,
             28,
             Some(hwnd),
@@ -243,6 +258,9 @@ fn show_connect_form(room_initial: &str, cookie_initial: &str) -> Option<Vec<Str
 
         let mut msg = MSG::default();
         while IsWindow(Some(hwnd)).as_bool() && !state.done && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if handle_dialog_shortcut(hwnd, &msg) {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -277,6 +295,14 @@ extern "system" fn dialog_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         state.done = true;
                     }
                     let _ = DestroyWindow(hwnd);
+                    LRESULT(0)
+                } else if id == ID_PASTE_COOKIE {
+                    if let Some(state) = dialog_state(hwnd) {
+                        if let Some(cookie_edit) = state.edits.get(1) {
+                            let _ = SetFocus(Some(*cookie_edit));
+                            let _ = SendMessageW(*cookie_edit, WM_PASTE, None, None);
+                        }
+                    }
                     LRESULT(0)
                 } else if id == ID_CANCEL {
                     if let Some(state) = dialog_state(hwnd) {
@@ -313,6 +339,22 @@ unsafe fn window_text(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..read])
 }
 
+unsafe fn handle_dialog_shortcut(dialog: HWND, msg: &MSG) -> bool {
+    if msg.message != WM_KEYDOWN || msg.wParam.0 != b'A' as usize || GetKeyState(VK_CONTROL_KEY) >= 0 {
+        return false;
+    }
+
+    let Some(state) = dialog_state(dialog) else {
+        return false;
+    };
+    if state.edits.iter().any(|edit| *edit == msg.hwnd) {
+        let _ = SendMessageW(msg.hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+        true
+    } else {
+        false
+    }
+}
+
 unsafe fn create_static(hwnd: HWND, instance: HINSTANCE, text: &str, x: i32, y: i32, width: i32, height: i32) -> Option<HWND> {
     let text_w = wide_string(text);
     CreateWindowExW(
@@ -333,9 +375,9 @@ unsafe fn create_static(hwnd: HWND, instance: HINSTANCE, text: &str, x: i32, y: 
 
 unsafe fn create_edit(hwnd: HWND, instance: HINSTANCE, id: usize, x: i32, y: i32, width: i32, height: i32, multiline: bool) -> Option<HWND> {
     let style = if multiline {
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_VSCROLL.0 | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_LEFT as u32)
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | WS_BORDER.0 | WS_VSCROLL.0 | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32 | ES_LEFT as u32)
     } else {
-        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | ES_AUTOHSCROLL as u32 | ES_LEFT as u32)
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | WS_BORDER.0 | ES_AUTOHSCROLL as u32 | ES_LEFT as u32)
     };
 
     CreateWindowExW(
